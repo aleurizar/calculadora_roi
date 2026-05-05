@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculadora de Adquisición SaaS</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #030c14; font-family: sans-serif; color: #c5daf0; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #030c14; }
+    ::-webkit-scrollbar-thumb { background: #0d1e2e; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+    const {
+      LineChart, Line, XAxis, YAxis, CartesianGrid,
+      Tooltip, ReferenceLine, ResponsiveContainer
+    } = Recharts;
+
+    // ── Pricing ──────────────────────────────────────────────────────────────
+    const PRICE_TIERS = [
+      { max: 5000,     price: 1.00 },
+      { max: 10000,    price: 0.75 },
+      { max: 20000,    price: 0.50 },
+      { max: Infinity, price: 0.25 },
+    ];
+    const getPrice = n => PRICE_TIERS.find(t => n <= t.max).price;
+
+    // ── Formatters ────────────────────────────────────────────────────────────
+    const fmtN   = (n, d = 0) => n.toLocaleString("es-AR", { minimumFractionDigits: d, maximumFractionDigits: d });
+    const fmtUSD = (n, d = 0) => "$" + fmtN(n, d);
+
+    // ── Card ──────────────────────────────────────────────────────────────────
+    function Card({ title, accent, children }) {
+      return (
+        <div style={{ background:"#07121e", border:"1px solid #0a1828", borderRadius:"12px", padding:"1.1rem 1.3rem" }}>
+          {title && <div style={{ fontSize:"10px", fontWeight:700, letterSpacing:"0.15em", color:accent||"#c5daf0", textTransform:"uppercase", marginBottom:"1rem" }}>{title}</div>}
+          {children}
+        </div>
+      );
+    }
+
+    // ── Slider ────────────────────────────────────────────────────────────────
+    function Slider({ label, value, onChange, min, max, step, display, hint }) {
+      const pct = ((value - min) / (max - min)) * 100;
+      return (
+        <div style={{ marginBottom:"1.1rem" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:"3px" }}>
+            <span style={{ fontSize:"11px", fontWeight:600, letterSpacing:"0.09em", textTransform:"uppercase", color:"#7a8fa6" }}>{label}</span>
+            <span style={{ fontSize:"15px", fontWeight:700, color:"#e8f2ff", fontFamily:"monospace" }}>{display}</span>
+          </div>
+          {hint && <div style={{ fontSize:"10px", color:"#3a4e62", marginBottom:"4px" }}>{hint}</div>}
+          <div style={{ position:"relative", height:"4px", background:"#0e1e30", borderRadius:"2px" }}>
+            <div style={{ position:"absolute", left:0, top:0, height:"100%", width:`${pct}%`, background:"linear-gradient(90deg,#1a4fff,#00c9a7)", borderRadius:"2px", pointerEvents:"none" }} />
+            <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(Number(e.target.value))}
+              style={{ position:"absolute", inset:"-8px 0", width:"100%", opacity:0, cursor:"pointer", height:"20px" }} />
+          </div>
+        </div>
+      );
+    }
+
+    // ── Metric ────────────────────────────────────────────────────────────────
+    function Metric({ label, value, sub, highlight, warn }) {
+      const color  = highlight ? "#00c9a7" : warn ? "#ffb347" : "#c5daf0";
+      const bg     = highlight ? "#071e36" : warn ? "#1a1000" : "#060f1a";
+      const border = highlight ? "#1a4fff33" : warn ? "#ffb34722" : "#0d1e2e";
+      return (
+        <div style={{ background:bg, border:`1px solid ${border}`, borderRadius:"10px", padding:"11px 13px" }}>
+          <div style={{ fontSize:"10px", fontWeight:600, letterSpacing:"0.1em", textTransform:"uppercase", color:"#3a5570", marginBottom:"2px" }}>{label}</div>
+          <div style={{ fontSize:"17px", fontWeight:700, fontFamily:"monospace", color }}>{value}</div>
+          {sub && <div style={{ fontSize:"10px", color:"#253545", marginTop:"2px" }}>{sub}</div>}
+        </div>
+      );
+    }
+
+    // ── FunnelBar ─────────────────────────────────────────────────────────────
+    function FunnelBar({ label, value, rawValue, color }) {
+      const pct = rawValue > 0 ? Math.min((value / rawValue) * 100, 100) : 0;
+      return (
+        <div style={{ marginBottom:"9px" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:"11px", marginBottom:"4px" }}>
+            <span style={{ color:"#5a7a96" }}>{label}</span>
+            <span style={{ fontFamily:"monospace", fontWeight:600, color:"#c5daf0" }}>{fmtN(Math.round(value))}</span>
+          </div>
+          <div style={{ background:"#0a1624", borderRadius:"3px", height:"6px", overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${pct}%`, background:color, borderRadius:"3px", transition:"width 0.35s cubic-bezier(.4,0,.2,1)" }} />
+          </div>
+        </div>
+      );
+    }
+
+    // ── ChartTooltip ──────────────────────────────────────────────────────────
+    const ChartTooltip = ({ active, payload, label }) => {
+      if (!active || !payload?.length) return null;
+      return (
+        <div style={{ background:"#07121e", border:"1px solid #0a1828", borderRadius:"10px", padding:"10px 14px", fontSize:"12px" }}>
+          <div style={{ color:"#5a7a96", marginBottom:"6px", fontWeight:600 }}>Mes {label}</div>
+          {payload.map((p, i) => (
+            <div key={i} style={{ color:p.color, marginBottom:"3px" }}>
+              {p.name}: <span style={{ fontWeight:700 }}>{p.name.includes("Acum") || p.name.includes("MRR") ? fmtUSD(p.value) : Number(p.value).toFixed(2)}</span>
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    // ── Tab: Calculadora ──────────────────────────────────────────────────────
+    function Calculadora({ shared, setShared }) {
+      const { raw, ticket, churn, opCost } = shared;
+      const setRaw    = v => setShared(s => ({...s, raw: v}));
+      const setTicket = v => setShared(s => ({...s, ticket: v}));
+      const setChurn  = v => setShared(s => ({...s, churn: v}));
+      const setOpCost = v => setShared(s => ({...s, opCost: v}));
+
+      const [pMQL,   setPMQL]   = useState(15);
+      const [pSQL,   setPSQL]   = useState(40);
+      const [pOpp,   setPOpp]   = useState(35);
+      const [pClose, setPClose] = useState(25);
+
+      const r = useMemo(() => {
+        const price    = getPrice(raw);
+        const mql      = raw * (pMQL / 100);
+        const sql      = mql * (pSQL / 100);
+        const opp      = sql * (pOpp / 100);
+        const clients  = opp * (pClose / 100);
+        const mrr      = clients * ticket;
+        const mrrNeto  = mrr * (1 - opCost / 100);
+        const ltv      = ticket / (churn / 100);
+        const ltvNeto  = ltv * (1 - opCost / 100);
+        const ltvTotal = clients * ltvNeto;
+        const myCost   = raw * price;
+        const cac      = clients > 0 ? myCost / clients : 0;
+        const roi      = myCost > 0 ? ltvTotal / myCost : 0;
+        const payback  = mrrNeto > 0 ? myCost / mrrNeto : 0;
+        const share    = ltvTotal > 0 ? (myCost / ltvTotal) * 100 : 0;
+        const totalPct = raw > 0 ? (clients / raw) * 100 : 0;
+        return { price, mql, sql, opp, clients, mrr, mrrNeto, ltv, ltvNeto, ltvTotal, myCost, cac, roi, payback, share, totalPct };
+      }, [raw, ticket, churn, opCost, pMQL, pSQL, pOpp, pClose]);
+
+      return (
+        <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)", gap:"14px", alignItems:"start" }}>
+          <div style={{ display:"flex", flexDirection:"column", gap:"12px" }}>
+            <Card accent="#00c9a7" title="Tus datos">
+              <Slider label="Registros raw" value={raw} onChange={setRaw} min={500} max={100000} step={500} display={fmtN(raw)} hint="Cantidad de registros que entregás" />
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"#030c14", border:"1px solid #0d1e2e", borderRadius:"8px", padding:"10px 14px" }}>
+                <div>
+                  <div style={{ fontSize:"10px", letterSpacing:"0.09em", textTransform:"uppercase", color:"#3a5570" }}>Costo del lote</div>
+                  <div style={{ fontSize:"10px", color:"#1e3045", marginTop:"2px" }}>{fmtN(raw)} reg × {fmtUSD(r.price,2)}/reg</div>
+                </div>
+                <div style={{ fontFamily:"monospace", fontSize:"1.6rem", fontWeight:700, color:"#1a4fff" }}>{fmtUSD(Math.round(r.myCost))}</div>
+              </div>
+            </Card>
+
+            <Card accent="#1a4fff" title="SaaS">
+              <Slider label="Ticket promedio mensual" value={ticket} onChange={setTicket} min={50} max={2000} step={10} display={fmtUSD(ticket)} />
+              <Slider label="Churn rate mensual"      value={churn}  onChange={setChurn}  min={1}  max={20}   step={0.5} display={churn + "%"} />
+              <Slider label="Costos operacionales"    value={opCost} onChange={setOpCost} min={5}  max={80}   step={5}   display={opCost + "%"} hint="% del MRR que se va en costos operativos" />
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"#030c14", border:"1px solid #0d1e2e", borderRadius:"8px", padding:"8px 14px" }}>
+                <div style={{ fontSize:"10px", color:"#3a5570", textTransform:"uppercase", letterSpacing:"0.08em" }}>Margen neto · MRR neto</div>
+                <div style={{ display:"flex", gap:"12px" }}>
+                  <span style={{ fontFamily:"monospace", fontSize:"13px", fontWeight:700, color:"#00c9a7" }}>{100 - opCost}%</span>
+                  <span style={{ fontFamily:"monospace", fontSize:"13px", fontWeight:700, color:"#c5daf0" }}>{fmtUSD(Math.round(r.mrrNeto))}</span>
+                </div>
+              </div>
+            </Card>
+
+            <Card accent="#8a6fff" title="Tasas de conversión">
+              <Slider label="Raw → MQL"            value={pMQL}   onChange={setPMQL}   min={1} max={60} step={1} display={pMQL + "%"} />
+              <Slider label="MQL → SQL"            value={pSQL}   onChange={setPSQL}   min={1} max={80} step={1} display={pSQL + "%"} />
+              <Slider label="SQL → Oportunidad"    value={pOpp}   onChange={setPOpp}   min={1} max={80} step={1} display={pOpp + "%"} />
+              <Slider label="Oportunidad → Cierre" value={pClose} onChange={setPClose} min={1} max={80} step={1} display={pClose + "%"} />
+            </Card>
+          </div>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:"12px" }}>
+            <Card title="Funnel de conversión">
+              <FunnelBar label="Registros raw"     value={raw}       rawValue={raw} color="#1a4fff" />
+              <FunnelBar label="MQL"               value={r.mql}     rawValue={raw} color="#2e78ff" />
+              <FunnelBar label="SQL"               value={r.sql}     rawValue={raw} color="#00a88a" />
+              <FunnelBar label="Oportunidades"     value={r.opp}     rawValue={raw} color="#7b5fff" />
+              <FunnelBar label="Clientes cerrados" value={r.clients} rawValue={raw} color="#00c9a7" />
+              <div style={{ marginTop:"10px", padding:"8px 12px", background:"#030c14", borderRadius:"8px", display:"flex", justifyContent:"space-between" }}>
+                <span style={{ fontSize:"11px", color:"#3a5570" }}>Conversión total raw → cliente</span>
+                <span style={{ fontFamily:"monospace", fontSize:"14px", fontWeight:700, color:"#8a6fff" }}>{r.totalPct.toFixed(2)}%</span>
+              </div>
+            </Card>
+
+            <Card title="Propuesta de valor">
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"8px", marginBottom:"8px" }}>
+                <Metric label="Lo que cobrás"     value={fmtUSD(Math.round(r.myCost))}   sub={`${fmtN(raw)} × ${fmtUSD(r.price,2)}`} highlight />
+                <Metric label="CAC que generás"   value={fmtUSD(Math.round(r.cac))}      sub="tu costo / clientes" />
+                <Metric label="MRR bruto"         value={fmtUSD(Math.round(r.mrr))}      sub={`${fmtN(Math.round(r.clients))} clts × ${fmtUSD(ticket)}`} />
+                <Metric label="MRR neto"          value={fmtUSD(Math.round(r.mrrNeto))}  sub={`después de ${opCost}% costos`} />
+                <Metric label="LTV neto total"    value={fmtUSD(Math.round(r.ltvTotal))} sub={`LTV unit neto ${fmtUSD(Math.round(r.ltvNeto))}`} />
+                <Metric label="Tu % del LTV neto" value={r.share.toFixed(1) + "%"}       sub="de lo que generás (neto)" />
+              </div>
+              <div style={{ background:"#040f1c", border:"1px solid #ffb34718", borderRadius:"10px", padding:"11px 14px", marginBottom:"8px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div>
+                  <div style={{ fontSize:"10px", fontWeight:600, letterSpacing:"0.1em", textTransform:"uppercase", color:"#ffb34799" }}>Payback de tu fee</div>
+                  <div style={{ fontSize:"10px", color:"#2a1a00", marginTop:"2px" }}>costo lote / MRR neto generado</div>
+                </div>
+                <div style={{ fontFamily:"monospace", fontSize:"1.8rem", fontWeight:700, color:"#ffb347", lineHeight:1 }}>
+                  {r.payback < 1 ? Math.round(r.payback * 30) + "d" : r.payback.toFixed(1) + "m"}
+                </div>
+              </div>
+              <div style={{ background:"#040f1c", border:"1px solid #1a4fff22", borderRadius:"10px", padding:"13px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div>
+                  <div style={{ fontSize:"10px", fontWeight:600, letterSpacing:"0.1em", textTransform:"uppercase", color:"#1a4fff99" }}>ROI para el cliente</div>
+                  <div style={{ fontSize:"10px", color:"#1a3050", marginTop:"2px" }}>LTV neto total / fee pagado</div>
+                </div>
+                <div style={{ fontFamily:"monospace", fontSize:"2.2rem", fontWeight:700, color:"#00c9a7", lineHeight:1 }}>{r.roi.toFixed(1)}x</div>
+              </div>
+            </Card>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Tab: Cohorte ──────────────────────────────────────────────────────────
+    function Cohorte({ shared }) {
+      const { ticket, churn, opCost } = shared;
+      const [clientes,  setClientes]  = useState(10);
+      const [horizonte, setHorizonte] = useState(36);
+
+      const fee = clientes * ticket * 12;
+
+      const data = useMemo(() => {
+        const churnRate = churn / 100;
+        const margen    = 1 - opCost / 100;
+        let mrrAcum = 0;
+        return Array.from({ length: horizonte }, (_, i) => {
+          const m       = i + 1;
+          const activos = clientes * Math.pow(1 - churnRate, m - 1);
+          const mrr     = activos * ticket * margen;
+          mrrAcum      += mrr;
+          return { mes: m, activos: parseFloat(activos.toFixed(2)), mrr: parseFloat(mrr.toFixed(0)), mrrAcum: parseFloat(mrrAcum.toFixed(0)) };
+        });
+      }, [ticket, churn, opCost, clientes, horizonte]);
+
+      const paybackMes = data.find(d => d.mrrAcum >= fee)?.mes ?? null;
+      const ltvNeto    = (ticket / (churn / 100)) * (1 - opCost / 100);
+
+      return (
+        <div style={{ display:"grid", gridTemplateColumns:"220px 1fr", gap:"14px", alignItems:"start" }}>
+          <Card accent="#00c9a7" title="Parámetros">
+            <div style={{ fontSize:"10px", color:"#3a5570", marginBottom:"0.8rem", lineHeight:"1.5" }}>
+              Ticket, churn y costos se sincronizan con la calculadora.
+            </div>
+            <Slider label="Clientes cerrados" value={clientes}  onChange={setClientes}  min={1} max={100} step={1} display={clientes} />
+            <Slider label="Horizonte (meses)" value={horizonte} onChange={setHorizonte} min={6} max={60}  step={6} display={horizonte + "m"} />
+            <div style={{ marginTop:"0.5rem", display:"flex", flexDirection:"column", gap:"7px" }}>
+              {[
+                { label:"Ticket",         value: fmtUSD(ticket) },
+                { label:"Churn mensual",  value: churn + "%" },
+                { label:"Costos operac.", value: opCost + "%" },
+                { label:"Duración prom.", value: (1/(churn/100)).toFixed(1) + " m" },
+                { label:"LTV neto unit.", value: fmtUSD(Math.round(ltvNeto)),                     color:"#00c9a7" },
+                { label:"Fee ref. anual", value: fmtUSD(fee),                                     color:"#1a4fff" },
+                { label:"Payback",        value: paybackMes ? `Mes ${paybackMes}` : "> horizonte", color:"#ffb347" },
+              ].map((m, i) => (
+                <div key={i} style={{ background:"#030c14", border:"1px solid #0d1e2e", borderRadius:"8px", padding:"7px 11px", display:"flex", justifyContent:"space-between" }}>
+                  <span style={{ fontSize:"10px", color:"#3a5570", textTransform:"uppercase", letterSpacing:"0.07em" }}>{m.label}</span>
+                  <span style={{ fontFamily:"monospace", fontSize:"11px", fontWeight:700, color:m.color||"#c5daf0" }}>{m.value}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:"12px" }}>
+            <Card title="Clientes activos en la cohorte">
+              <ResponsiveContainer width="100%" height={170}>
+                <LineChart data={data} margin={{ top:4, right:10, left:0, bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#0a1828" />
+                  <XAxis dataKey="mes" tick={{ fill:"#3a5570", fontSize:10 }} />
+                  <YAxis tick={{ fill:"#3a5570", fontSize:10 }} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Line type="monotone" dataKey="activos" name="Activos" stroke="#8a6fff" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+
+            <Card title="MRR neto acumulado vs Fee de referencia">
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={data} margin={{ top:4, right:10, left:10, bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#0a1828" />
+                  <XAxis dataKey="mes" tick={{ fill:"#3a5570", fontSize:10 }} />
+                  <YAxis tick={{ fill:"#3a5570", fontSize:10 }} tickFormatter={v => "$" + (v/1000).toFixed(0) + "k"} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <ReferenceLine y={fee} stroke="#1a4fff" strokeDasharray="5 4"
+                    label={{ value:"Fee", fill:"#1a4fff", fontSize:10, position:"insideTopRight" }} />
+                  {paybackMes && <ReferenceLine x={paybackMes} stroke="#ffb347" strokeDasharray="4 3"
+                    label={{ value:`Payback m${paybackMes}`, fill:"#ffb347", fontSize:10, position:"insideTopLeft" }} />}
+                  <Line type="monotone" dataKey="mrrAcum" name="MRR Acum. neto" stroke="#00c9a7" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+        </div>
+      );
+    }
+
+    // ── App root ──────────────────────────────────────────────────────────────
+    const TABS = [
+      { id:"calc",    label:"Calculadora" },
+      { id:"cohorte", label:"Cohorte"     },
+    ];
+
+    function App() {
+      const [tab,    setTab]    = useState("calc");
+      const [shared, setShared] = useState({ raw:10000, ticket:230, churn:5, opCost:40 });
+
+      return (
+        <div style={{ minHeight:"100vh" }}>
+          {/* Header */}
+          <div style={{ borderBottom:"1px solid #0a1828", padding:"1rem 2rem", background:"#050e1a" }}>
+            <div style={{ maxWidth:"1100px", margin:"0 auto", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+              <div>
+                <div style={{ fontSize:"10px", fontWeight:700, letterSpacing:"0.2em", color:"#1a4fff", textTransform:"uppercase", marginBottom:"2px" }}>Data Partner · SaaS</div>
+                <h1 style={{ fontSize:"1.3rem", fontWeight:800, color:"#e8f2ff" }}>Calculadora de Adquisición</h1>
+              </div>
+              <div style={{ display:"flex", gap:"6px", background:"#07121e", border:"1px solid #0a1828", borderRadius:"10px", padding:"4px" }}>
+                {TABS.map(t => (
+                  <button key={t.id} onClick={() => setTab(t.id)} style={{
+                    padding:"7px 20px", borderRadius:"7px", border:"none", cursor:"pointer",
+                    fontSize:"12px", fontWeight:700, letterSpacing:"0.05em",
+                    background: tab === t.id ? "#1a4fff" : "transparent",
+                    color:      tab === t.id ? "#fff"    : "#3a5570",
+                    transition:"all 0.2s"
+                  }}>{t.label}</button>
+                ))}
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:"10px", color:"#3a5570", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:"2px" }}>Ticket activo</div>
+                <div style={{ fontFamily:"monospace", fontSize:"1.3rem", fontWeight:700, color:"#00c9a7" }}>
+                  {fmtUSD(shared.ticket)}<span style={{ fontSize:"11px", color:"#3a5570", marginLeft:"4px" }}>USD/mes</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div style={{ maxWidth:"1100px", margin:"0 auto", padding:"1.4rem 1.5rem 3rem" }}>
+            {tab === "calc"
+              ? <Calculadora shared={shared} setShared={setShared} />
+              : <Cohorte     shared={shared} />
+            }
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
