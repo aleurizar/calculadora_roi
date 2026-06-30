@@ -36,7 +36,7 @@ pendo.initialize({
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useMemo } = React;
+    const { useState, useMemo, useEffect, useRef } = React;
     const {
       LineChart, Line, XAxis, YAxis, CartesianGrid,
       Tooltip, ReferenceLine, ResponsiveContainer
@@ -162,6 +162,78 @@ pendo.initialize({
         return { price, mql, sql, opp, clients, mrr, mrrNeto, ltv, ltvNeto, ltvTotal, myCost, cac, roi, payback, share, totalPct };
       }, [raw, ticket, churn, opCost, pMQL, pSQL, pOpp, pClose]);
 
+      // Pendo Track: roi_calculation_completed (debounced 1.5s after any slider change)
+      const isFirstRoiRender = useRef(true);
+      useEffect(() => {
+        if (isFirstRoiRender.current) { isFirstRoiRender.current = false; return; }
+        const timer = setTimeout(() => {
+          if (typeof pendo !== 'undefined' && pendo.track) {
+            pendo.track("roi_calculation_completed", {
+              raw_records: raw,
+              cost_per_record: r.price,
+              total_cost: Math.round(r.myCost),
+              ticket_price: ticket,
+              churn_rate: churn,
+              operational_cost: opCost,
+              mql_rate: pMQL,
+              sql_rate: pSQL,
+              opp_rate: pOpp,
+              close_rate: pClose,
+              total_conversion_pct: parseFloat(r.totalPct.toFixed(2)),
+              clients_won: parseFloat(r.clients.toFixed(2)),
+              cac: Math.round(r.cac),
+              mrr_gross: Math.round(r.mrr),
+              mrr_net: Math.round(r.mrrNeto),
+              ltv_net_unit: Math.round(r.ltvNeto),
+              ltv_net_total: Math.round(r.ltvTotal),
+              roi_multiple: parseFloat(r.roi.toFixed(2)),
+              payback_period: parseFloat(r.payback.toFixed(2)),
+              cost_share_pct: parseFloat(r.share.toFixed(2))
+            });
+          }
+        }, 1500);
+        return () => clearTimeout(timer);
+      }, [raw, ticket, churn, opCost, pMQL, pSQL, pOpp, pClose]);
+
+      // Pendo Track: saas_model_configured (debounced 1.5s after SaaS param change)
+      const isFirstSaasRender = useRef(true);
+      useEffect(() => {
+        if (isFirstSaasRender.current) { isFirstSaasRender.current = false; return; }
+        const timer = setTimeout(() => {
+          if (typeof pendo !== 'undefined' && pendo.track) {
+            pendo.track("saas_model_configured", {
+              ticket_price: ticket,
+              churn_rate: churn,
+              operational_cost: opCost,
+              net_margin_pct: 100 - opCost,
+              avg_client_duration_months: parseFloat((1 / (churn / 100)).toFixed(1)),
+              active_tab: "calc"
+            });
+          }
+        }, 1500);
+        return () => clearTimeout(timer);
+      }, [ticket, churn, opCost]);
+
+      // Pendo Track: conversion_funnel_configured (debounced 1.5s after funnel rate change)
+      const isFirstFunnelRender = useRef(true);
+      useEffect(() => {
+        if (isFirstFunnelRender.current) { isFirstFunnelRender.current = false; return; }
+        const timer = setTimeout(() => {
+          if (typeof pendo !== 'undefined' && pendo.track) {
+            pendo.track("conversion_funnel_configured", {
+              mql_rate: pMQL,
+              sql_rate: pSQL,
+              opp_rate: pOpp,
+              close_rate: pClose,
+              total_conversion_pct: parseFloat(r.totalPct.toFixed(2)),
+              raw_records: raw,
+              resulting_clients: parseFloat(r.clients.toFixed(2))
+            });
+          }
+        }, 1500);
+        return () => clearTimeout(timer);
+      }, [pMQL, pSQL, pOpp, pClose]);
+
       return (
         <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)", gap:"14px", alignItems:"start" }}>
           <div style={{ display:"flex", flexDirection:"column", gap:"12px" }}>
@@ -264,6 +336,31 @@ pendo.initialize({
 
       const paybackMes = data.find(d => d.mrrAcum >= fee)?.mes ?? null;
       const ltvNeto    = (ticket / (churn / 100)) * (1 - opCost / 100);
+
+      // Pendo Track: cohort_analysis_completed (debounced 1.5s after parameter change)
+      const isFirstCohortRender = useRef(true);
+      useEffect(() => {
+        if (isFirstCohortRender.current) { isFirstCohortRender.current = false; return; }
+        const timer = setTimeout(() => {
+          if (typeof pendo !== 'undefined' && pendo.track) {
+            const lastEntry = data[data.length - 1];
+            pendo.track("cohort_analysis_completed", {
+              clients_count: clientes,
+              horizon_months: horizonte,
+              ticket_price: ticket,
+              churn_rate: churn,
+              operational_cost: opCost,
+              annual_reference_fee: fee,
+              payback_month: paybackMes,
+              ltv_net_unit: Math.round(ltvNeto),
+              avg_client_duration_months: parseFloat((1 / (churn / 100)).toFixed(1)),
+              final_month_active_clients: lastEntry ? lastEntry.activos : 0,
+              final_month_mrr_accumulated: lastEntry ? lastEntry.mrrAcum : 0
+            });
+          }
+        }, 1500);
+        return () => clearTimeout(timer);
+      }, [ticket, churn, opCost, clientes, horizonte]);
 
       return (
         <div style={{ display:"grid", gridTemplateColumns:"220px 1fr", gap:"14px", alignItems:"start" }}>
